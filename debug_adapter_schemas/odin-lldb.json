@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Odin LLDB Debug Configuration",
+  "type": "object",
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "enum": ["odin-lldb"],
+      "description": "Debug adapter name"
+    },
+    "label": {
+      "type": "string",
+      "description": "Label of the debug configuration"
+    },
+    "request": {
+      "type": "string",
+      "enum": ["launch", "attach"],
+      "description": "Request type"
+    },
+    "program": {
+      "type": "string",
+      "description": "Path to the executable to debug"
+    },
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Command line arguments to pass to the program",
+      "default": []
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for the program",
+      "default": "${workspaceFolder}"
+    },
+    "environment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "value"]
+      },
+      "description": "Environment variables to set",
+      "default": []
+    },
+    "stopAtEntry": {
+      "type": "boolean",
+      "description": "Stop at the main function",
+      "default": false
+    },
+    "initCommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Initialization commands to run in LLDB",
+      "default": []
+    },
+    "preRunCommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commands to run before starting the program",
+      "default": []
+    },
+    "postRunCommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commands to run after the program exits",
+      "default": []
+    },
+    "preLaunchTask": {
+      "type": "string",
+      "description": "Task to run before launching the debugger"
+    },
+    "postDebugTask": {
+      "type": "string",
+      "description": "Task to run after the debug session ends"
+    },
+    "processId": {
+      "type": ["string", "number"],
+      "description": "Process ID to attach to (for attach requests)"
+    },
+    "lldbPath": {
+      "type": "string",
+      "description": "Path to LLDB executable",
+      "default": "lldb"
+    }
+  },
+  "required": ["adapter", "label", "request"],
+  "oneOf": [
+    {
+      "properties": {
+        "request": {
+          "const": "launch"
+        }
+      },
+      "required": ["program"]
+    },
+    {
+      "properties": {
+        "request": {
+          "const": "attach"
+        }
+      },
+      "required": ["processId"]
+    }
+  ]
+}

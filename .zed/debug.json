@@ -1,0 +1,17 @@
+[
+  {
+    "adapter": "odin-lldb",
+    "label": "Debug Example",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/example/main",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT/example",
+    "stopAtEntry": false,
+    "build": {
+      "command": "odin",
+      "args": ["build", "example", "-out:example/main", "-debug"],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    },
+    "initCommands": ["settings set target.load-script-from-symbol-file true"]
+  }
+]

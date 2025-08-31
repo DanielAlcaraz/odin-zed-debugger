@@ -1,0 +1,15 @@
+id = "odin-debugger"
+name = "Odin Debugger"
+version = "0.1.0"
+schema_version = 1
+authors = ["Daniel Alcaraz"]
+description = "Debug Adapter Protocol support for Odin programming language"
+repository = "https://github.com/DanielAlcaraz/zed-odin-debugger"
+
+[debug_adapters.odin-gdb]
+schema_path = "debug_adapter_schemas/odin-gdb.json"
+
+[debug_adapters.odin-lldb]
+schema_path = "debug_adapter_schemas/odin-lldb.json"
+
+[debug_locators.odin-build]

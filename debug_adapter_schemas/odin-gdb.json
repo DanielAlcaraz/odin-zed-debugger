@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Odin GDB Debug Configuration",
+  "type": "object",
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "enum": ["odin-gdb"],
+      "description": "Debug adapter name"
+    },
+    "label": {
+      "type": "string",
+      "description": "Label of the debug configuration"
+    },
+    "request": {
+      "type": "string",
+      "enum": ["launch", "attach"],
+      "description": "Request type"
+    },
+    "program": {
+      "type": "string",
+      "description": "Path to the executable to debug"
+    },
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Command line arguments to pass to the program",
+      "default": []
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for the program",
+      "default": "${workspaceFolder}"
+    },
+    "environment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "value"]
+      },
+      "description": "Environment variables to set",
+      "default": []
+    },
+    "stopAtEntry": {
+      "type": "boolean",
+      "description": "Stop at the main function",
+      "default": false
+    },
+    "setupCommands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "ignoreFailures": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": ["text"]
+      },
+      "description": "Setup commands to run in GDB",
+      "default": []
+    },
+    "preLaunchTask": {
+      "type": "string",
+      "description": "Task to run before launching the debugger"
+    },
+    "build": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Build command to run before debugging"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": ["command"]
+        }
+      ],
+      "description": "Build task to run before debugging"
+    },
+    "postDebugTask": {
+      "type": "string",
+      "description": "Task to run after the debug session ends"
+    },
+    "processId": {
+      "type": ["string", "number"],
+      "description": "Process ID to attach to (for attach requests)"
+    },
+    "gdbPath": {
+      "type": "string",
+      "description": "Path to GDB executable",
+      "default": "gdb"
+    },
+    "miMode": {
+      "type": "string",
+      "enum": ["gdb", "lldb"],
+      "description": "MI mode",
+      "default": "gdb"
+    }
+  },
+  "required": ["adapter", "label", "request"],
+  "oneOf": [
+    {
+      "properties": {
+        "request": {
+          "const": "launch"
+        }
+      },
+      "required": ["program"]
+    },
+    {
+      "properties": {
+        "request": {
+          "const": "attach"
+        }
+      },
+      "required": ["processId"]
+    }
+  ]
+}
