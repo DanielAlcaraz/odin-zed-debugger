@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use zed_extension_api::{
     self as zed, serde_json, DebugAdapterBinary, DebugConfig, DebugRequest, DebugScenario,
     DebugTaskDefinition, Result, StartDebuggingRequestArguments,
@@ -18,7 +19,7 @@ impl zed::Extension for OdinDebuggerExtension {
         &mut self,
         adapter_name: String,
         config: DebugTaskDefinition,
-        _user_provided_debug_adapter_path: Option<String>,
+        user_provided_debug_adapter_path: Option<String>,
         _worktree: &Worktree,
     ) -> Result<DebugAdapterBinary, String> {
         match adapter_name.as_str() {
@@ -41,9 +42,32 @@ impl zed::Extension for OdinDebuggerExtension {
                 })
             }
             "odin-lldb" => {
-                // Use LLDB DAP adapter
+                // Allow user to override the DAP path
+                let lldb_dap_command = if let Some(user_path) = user_provided_debug_adapter_path {
+                    user_path
+                } else {
+                    self.find_lldb_dap_binary()?
+                };
+
+                // Log which binary we're using (for debugging)
+                eprintln!("Using lldb-dap at: {}", lldb_dap_command);
+
                 Ok(DebugAdapterBinary {
-                    command: Some("lldb-dap".to_string()),
+                    command: Some(lldb_dap_command),
+                    arguments: vec![],
+                    envs: vec![],
+                    cwd: None,
+                    connection: None,
+                    request_args: StartDebuggingRequestArguments {
+                        configuration: config.config,
+                        request: StartDebuggingRequestArgumentsRequest::Launch,
+                    },
+                })
+            }
+            "odin-codelldb" => {
+                // Use CodeLLDB which works well on macOS
+                Ok(DebugAdapterBinary {
+                    command: Some("codelldb".to_string()),
                     arguments: vec![],
                     envs: vec![],
                     cwd: None,
@@ -101,6 +125,7 @@ impl zed::Extension for OdinDebuggerExtension {
 
         if config.stop_on_entry.unwrap_or(false) {
             dap_config.insert("stopAtEntry".to_string(), Value::Bool(true));
+            dap_config.insert("stopOnEntry".to_string(), Value::Bool(true)); // Some versions use this
         }
 
         // Add adapter-specific setup
@@ -121,7 +146,9 @@ impl zed::Extension for OdinDebuggerExtension {
                 dap_config.insert("setupCommands".to_string(), Value::Array(setup_commands));
             }
             "odin-lldb" => {
+                // Minimal init commands for macOS
                 let init_commands = vec!["settings set target.load-script-from-symbol-file true"];
+
                 dap_config.insert(
                     "initCommands".to_string(),
                     Value::Array(
@@ -130,6 +157,12 @@ impl zed::Extension for OdinDebuggerExtension {
                             .map(|cmd| Value::String(cmd.to_string()))
                             .collect(),
                     ),
+                );
+
+                // Add sourceMap if needed for proper path resolution
+                dap_config.insert(
+                    "sourceMap".to_string(),
+                    Value::Object(serde_json::Map::new()),
                 );
             }
             _ => {}
@@ -156,15 +189,12 @@ impl zed::Extension for OdinDebuggerExtension {
             return None;
         }
 
-        // Verify the debugger exists before creating scenario
-        let debugger_command = match debug_adapter_name.as_str() {
-            "odin-gdb" => "gdb",
-            "odin-lldb" => "lldb-dap",
-            _ => return None,
-        };
-
-        if !self.check_command_exists(debugger_command) {
-            return None;
+        // For lldb adapter, verify we can find a working binary
+        if debug_adapter_name == "odin-lldb" {
+            if self.find_lldb_dap_binary().is_err() {
+                eprintln!("Could not find working lldb-dap binary");
+                return None;
+            }
         }
 
         // Check if the directory has Odin files
@@ -205,6 +235,7 @@ impl zed::Extension for OdinDebuggerExtension {
             }
             "odin-lldb" => {
                 let init_commands = vec!["settings set target.load-script-from-symbol-file true"];
+
                 dap_config.insert(
                     "initCommands".to_string(),
                     Value::Array(
@@ -223,7 +254,7 @@ impl zed::Extension for OdinDebuggerExtension {
             adapter: debug_adapter_name,
             config: serde_json::to_string(&Value::Object(dap_config)).unwrap(),
             tcp_connection: None,
-            build: None, // We'll handle build separately since we need BuildTaskDefinition
+            build: None,
         })
     }
 
@@ -232,35 +263,138 @@ impl zed::Extension for OdinDebuggerExtension {
         _locator_name: String,
         _build_task: TaskTemplate,
     ) -> Result<DebugRequest, String> {
-        // This is called after the build task completes
-        // We can check what was actually built and adjust the program path if needed
-
-        // For now, we'll use the static path resolution since Odin build outputs
-        // are generally predictable. If you need dynamic discovery after build,
-        // you could scan the output directory for executables here.
-
         Err("Use static path resolution from dap_locator_create_scenario".to_string())
     }
 }
 
 impl OdinDebuggerExtension {
-    fn resolve_program_path(&self, config: &DebugConfig) -> Result<String, String> {
-        // Try different strategies to find the program path
+    fn find_lldb_dap_binary(&self) -> Result<String, String> {
+        // First, check if there's a user-provided override in the environment
+        if let Ok(custom_path) = std::env::var("ODIN_LLDB_DAP_PATH") {
+            if self.test_lldb_dap_binary(&custom_path) {
+                eprintln!(
+                    "Using custom lldb-dap from ODIN_LLDB_DAP_PATH: {}",
+                    custom_path
+                );
+                return Ok(custom_path);
+            }
+        }
 
-        // 1. If the label looks like a path or executable name, use it
-        if config.label.contains('/') || config.label.ends_with(".exe") {
+        // List of possible lldb-dap/lldb-vscode binaries to try
+        let candidates = vec![
+            // The actual lldb-dap from Xcode (not the symlink to lldb)
+            (
+                "/Library/Developer/CommandLineTools/usr/bin/lldb-dap",
+                "Xcode lldb-dap",
+            ),
+            (
+                "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap",
+                "Xcode.app lldb-dap",
+            ),
+            // Found on your system - lldb-vscode
+            ("/opt/homebrew/bin/lldb-vscode", "lldb-vscode (Homebrew)"),
+            // LLVM 20 installation paths (Homebrew)
+            (
+                "/opt/homebrew/opt/llvm/bin/lldb-dap",
+                "LLVM 20 lldb-dap (Homebrew)",
+            ),
+            (
+                "/opt/homebrew/opt/llvm@20/bin/lldb-dap",
+                "LLVM 20 lldb-dap (Homebrew versioned)",
+            ),
+            (
+                "/usr/local/opt/llvm/bin/lldb-dap",
+                "LLVM lldb-dap (Homebrew Intel Mac)",
+            ),
+            (
+                "/usr/local/opt/llvm@20/bin/lldb-dap",
+                "LLVM 20 lldb-dap (Homebrew Intel Mac)",
+            ),
+            // Try lldb-vscode as well (older name for the same tool)
+            (
+                "/opt/homebrew/opt/llvm/bin/lldb-vscode",
+                "LLVM lldb-vscode (Homebrew)",
+            ),
+            (
+                "/opt/homebrew/opt/llvm@20/bin/lldb-vscode",
+                "LLVM 20 lldb-vscode (Homebrew)",
+            ),
+            // Xcode paths (might not work with LLVM 20 compiled binaries)
+            (
+                "/Library/Developer/CommandLineTools/usr/bin/lldb-dap",
+                "Xcode lldb-dap",
+            ),
+            (
+                "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap",
+                "Xcode.app lldb-dap",
+            ),
+            // MacPorts paths
+            ("/opt/local/bin/lldb-dap-20", "LLVM 20 lldb-dap (MacPorts)"),
+            ("/opt/local/bin/lldb-dap", "LLVM lldb-dap (MacPorts)"),
+            // System paths (last resort)
+            ("lldb-dap", "lldb-dap in PATH"),
+            ("lldb-vscode", "lldb-vscode in PATH"),
+        ];
+
+        // Try each candidate and test if it works
+        for (path, description) in candidates {
+            if self.test_lldb_dap_binary(path) {
+                eprintln!("Found working lldb-dap: {} ({})", path, description);
+                return Ok(path.to_string());
+            }
+        }
+
+        // If nothing works, provide helpful error message
+        Err(format!(
+            "Could not find a working lldb-dap binary. \
+            Please install LLVM 20 via Homebrew: `brew install llvm@20` \
+            or set a custom path in your Zed settings under 'dap.odin-lldb.binary'"
+        ))
+    }
+
+    fn test_lldb_dap_binary(&self, path: &str) -> bool {
+        // First check if the file exists (for absolute paths)
+        if path.starts_with('/') && !Path::new(path).exists() {
+            return false;
+        }
+
+        // Try to run the binary with --help to see if it works
+        if let Ok(output) = Command::new(path).arg("--help").output() {
+            // Check if the command succeeded and produced output
+            if output.status.success() || !output.stdout.is_empty() || !output.stderr.is_empty() {
+                // Additional check: make sure it's actually lldb-dap/lldb-vscode
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = format!("{}{}", stdout, stderr).to_lowercase();
+
+                // Look for indicators this is the right tool
+                if combined.contains("lldb")
+                    || combined.contains("dap")
+                    || combined.contains("vscode")
+                    || combined.contains("debug")
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn resolve_program_path(&self, config: &DebugConfig) -> Result<String, String> {
+        // If the label contains a path separator or looks like a full path, use it as-is
+        if config.label.contains('/') || config.label.starts_with("$") {
             return Ok(config.label.clone());
         }
 
-        // 2. Look for common Odin executable patterns in the current directory
+        // Clean the label to create a valid filename
+        let clean_label = config.label.replace(' ', "_");
+
+        // Look for the executable in common locations
         let possible_paths = vec![
-            format!("./{}", &config.label),
-            format!("./bin/{}", &config.label),
-            format!("./build/{}", &config.label),
-            format!("./{}", &config.label.replace(' ', "_")),
-            format!("./bin/{}", &config.label.replace(' ', "_")),
-            format!("./build/{}", &config.label.replace(' ', "_")),
-            // Common Odin output names
+            format!("./{}", clean_label),
+            format!("./bin/{}", clean_label),
+            format!("./build/{}", clean_label),
             "./main".to_string(),
             "./app".to_string(),
             format!(
@@ -270,22 +404,23 @@ impl OdinDebuggerExtension {
         ];
 
         // Check if any of these paths exist
-        for path in possible_paths {
-            if Path::new(&path).exists() {
-                return Ok(path);
+        for path in &possible_paths {
+            if Path::new(path).exists() {
+                // Return absolute path to avoid issues with working directory
+                if let Ok(abs_path) = std::fs::canonicalize(path) {
+                    if let Some(path_str) = abs_path.to_str() {
+                        return Ok(path_str.to_string());
+                    }
+                }
+                return Ok(path.clone());
             }
         }
 
-        // 3. Fall back to using Zed variables for dynamic resolution
-        // Use $ZED_WORKTREE_ROOT instead of trying to resolve paths ourselves
-        Ok(format!(
-            "$ZED_WORKTREE_ROOT/{}",
-            &config.label.replace(' ', "_")
-        ))
+        // Fall back to using Zed variables
+        Ok(format!("$ZED_WORKTREE_ROOT/{}", clean_label))
     }
 
     fn get_directory_name(&self) -> Option<String> {
-        // Get the current directory name as a fallback for executable name
         std::env::current_dir()
             .ok()?
             .file_name()?
@@ -294,7 +429,6 @@ impl OdinDebuggerExtension {
     }
 
     fn is_odin_build_task(&self, task: &TaskTemplate) -> bool {
-        // Check if the command mentions odin and build
         let command_lower = task.command.to_lowercase();
         let has_odin = command_lower.contains("odin");
         let has_build = command_lower.contains("build")
@@ -314,54 +448,36 @@ impl OdinDebuggerExtension {
         let args = &task.args;
         let cwd = task.cwd.as_deref().unwrap_or(".");
 
-        // Look for -out: flag first
+        // Look for -out: or -out flag
         for (i, arg) in args.iter().enumerate() {
             if arg.starts_with("-out:") {
-                return Some(arg.strip_prefix("-out:").unwrap().to_string());
+                let output = arg.strip_prefix("-out:").unwrap();
+                return Some(self.make_absolute_path(output, cwd));
             }
-            if arg == "-out" && i + 1 < args.len() {
-                return Some(args[i + 1].clone());
-            }
-        }
-
-        // Look for -o flag (common alternative)
-        for (i, arg) in args.iter().enumerate() {
-            if arg == "-o" && i + 1 < args.len() {
-                return Some(args[i + 1].clone());
+            if (arg == "-out" || arg == "-o") && i + 1 < args.len() {
+                return Some(self.make_absolute_path(&args[i + 1], cwd));
             }
         }
 
-        // Check if there's a specific package being built
+        // Default Odin output location
         let package_name = self.extract_package_name(task, resolved_label);
+        Some(format!("{}/{}", cwd, package_name))
+    }
 
-        // Try different common output patterns and check which one exists or is most likely
-        let possible_outputs = vec![
-            format!("{}/{}", cwd, package_name),
-            format!("{}/bin/{}", cwd, package_name),
-            format!("{}/build/{}", cwd, package_name),
-            format!("{}/main", cwd),
-            format!("{}/app", cwd),
-        ];
-
-        // Check if any of the possible outputs already exist (from previous builds)
-        for output_path in &possible_outputs {
-            if Path::new(output_path).exists() {
-                return Some(output_path.clone());
-            }
+    fn make_absolute_path(&self, path: &str, cwd: &str) -> String {
+        if path.starts_with('/') || path.starts_with("$") {
+            path.to_string()
+        } else if path.starts_with("./") {
+            format!("{}/{}", cwd, &path[2..])
+        } else {
+            format!("{}/{}", cwd, path)
         }
-
-        // If none exist, return the most likely based on Odin conventions
-        // Odin typically outputs to the current directory with the package name
-        Some(possible_outputs[0].clone())
     }
 
     fn extract_package_name(&self, task: &TaskTemplate, resolved_label: &str) -> String {
-        // Try to extract package name from the task
-
         // Look for package directory in args
         for arg in &task.args {
             if !arg.starts_with("-") && arg != "build" && arg != "run" {
-                // This might be a package path
                 if let Some(package_name) = Path::new(arg).file_name() {
                     if let Some(name_str) = package_name.to_str() {
                         return name_str.to_string();
@@ -370,7 +486,7 @@ impl OdinDebuggerExtension {
             }
         }
 
-        // Fall back to using the resolved label or directory name
+        // Fall back to label or directory name
         if !resolved_label.is_empty() {
             resolved_label.replace(' ', "_")
         } else {
@@ -378,39 +494,7 @@ impl OdinDebuggerExtension {
         }
     }
 
-    fn check_command_exists(&self, command: &str) -> bool {
-        // Try multiple ways to check if the command exists
-
-        // First, try using 'which'
-        if let Ok(output) = std::process::Command::new("which").arg(command).output() {
-            if output.status.success() {
-                return true;
-            }
-        }
-
-        // Fallback: try using 'command -v' (more portable)
-        if let Ok(output) = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&format!("command -v {}", command))
-            .output()
-        {
-            if output.status.success() {
-                return true;
-            }
-        }
-
-        // Last resort: try running the command with --version
-        if let Ok(output) = std::process::Command::new(command)
-            .arg("--version")
-            .output()
-        {
-            return output.status.success();
-        }
-
-        false
-    }
-
-    fn has_odin_files(&self, dir: &std::path::Path) -> bool {
+    fn has_odin_files(&self, dir: &Path) -> bool {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 if let Some(ext) = entry.path().extension() {

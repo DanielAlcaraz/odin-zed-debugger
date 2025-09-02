@@ -5,6 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
+name = "odin_debugger"
 
 [dependencies]
 zed_extension_api = "0.6.0"

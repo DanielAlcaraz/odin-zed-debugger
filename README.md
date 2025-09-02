@@ -119,6 +119,19 @@ When you run debug commands, the extension will:
 2. Launch the debugger with the built executable
 3. Set up Odin-specific debugging options
 
+## Problems you can find
+
+### MacOS
+
+Add the LLDB-DAP route into your `settings.json`, in my case:
+```json
+  "dap": {
+    "odin-lldb": {
+      "binary": "/Library/Developer/CommandLineTools/usr/bin/lldb-dap"
+    }
+  }
+```
+
 ## Contributing
 
 1. Fork the repository
