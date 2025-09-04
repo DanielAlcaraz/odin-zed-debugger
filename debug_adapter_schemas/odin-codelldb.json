@@ -1,11 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Odin LLDB Debug Configuration",
+  "title": "Odin CodeLLDB Debug Configuration",
   "type": "object",
   "properties": {
     "adapter": {
       "type": "string",
-      "enum": ["odin-lldb"],
+      "enum": ["odin-codelldb"],
       "description": "Debug adapter name"
     },
     "label": {
@@ -35,31 +35,16 @@
       "default": "${workspaceFolder}"
     },
     "environment": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        },
-        "required": ["name", "value"],
-        "additionalProperties": false
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
       },
       "description": "Environment variables to set for the program",
-      "default": []
-    },
-    "stopAtEntry": {
-      "type": "boolean",
-      "description": "Stop at the main function entry point",
-      "default": false
+      "default": {}
     },
     "stopOnEntry": {
       "type": "boolean",
-      "description": "Alternative form of stopAtEntry for compatibility",
+      "description": "Stop at the main function entry point",
       "default": false
     },
     "initCommands": {
@@ -68,7 +53,7 @@
         "type": "string"
       },
       "description": "LLDB commands to execute during debugger initialization",
-      "default": ["settings set target.load-script-from-symbol-file true"]
+      "default": []
     },
     "preRunCommands": {
       "type": "array",
@@ -86,6 +71,14 @@
       "description": "LLDB commands to execute after the program exits",
       "default": []
     },
+    "sourceLanguages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "A list of source languages used by the program",
+      "default": ["odin"]
+    },
     "sourceMap": {
       "type": "object",
       "additionalProperties": {
@@ -93,6 +86,10 @@
       },
       "description": "Map source file paths for debugging (remote path -> local path)",
       "default": {}
+    },
+    "relativePathBase": {
+      "type": "string",
+      "description": "Base path for resolving relative source paths"
     },
     "preLaunchTask": {
       "type": "string",
@@ -133,26 +130,34 @@
           "type": "number"
         }
       ],
-      "description": "Process ID to attach to (for attach requests). Can be a number or expression like '${command:pickProcess}'"
+      "description": "Process ID to attach to (for attach requests)"
+    },
+    "pid": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "description": "Alias for processId"
     },
     "waitFor": {
       "type": "boolean",
       "description": "Wait for the process to be launched before attaching",
       "default": false
     },
-    "attachCommands": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "LLDB commands to execute when attaching to a process",
-      "default": []
-    },
     "console": {
       "type": "string",
       "enum": ["internalConsole", "integratedTerminal", "externalTerminal"],
       "description": "Where to launch the debug target",
       "default": "internalConsole"
+    },
+    "terminal": {
+      "type": "string",
+      "enum": ["integrated", "external", "console"],
+      "description": "Alternative way to specify console type"
     },
     "internalConsoleOptions": {
       "type": "string",
@@ -164,6 +169,49 @@
       "type": "boolean",
       "description": "Show inline variable values in the editor",
       "default": true
+    },
+    "expressions": {
+      "type": "string",
+      "enum": ["simple", "python", "native"],
+      "description": "Expression evaluator type",
+      "default": "simple"
+    },
+    "cargo": {
+      "type": "object",
+      "description": "Rust/Cargo specific settings (if applicable)",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "stdio": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ],
+      "description": "Stdio redirection configuration"
     }
   },
   "required": ["adapter", "label", "request"],
@@ -189,7 +237,14 @@
         }
       },
       "then": {
-        "required": ["processId"]
+        "anyOf": [
+          {
+            "required": ["processId"]
+          },
+          {
+            "required": ["pid"]
+          }
+        ]
       }
     }
   ]
